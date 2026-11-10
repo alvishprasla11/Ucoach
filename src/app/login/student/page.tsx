@@ -4,6 +4,8 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import AuthShell from "../../../components/AuthShell";
 
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
 export default function StudentLoginPage() {
   const router = useRouter();
   const [form, setForm] = useState({ email: "", password: "", name: "", ucid: "" });
@@ -19,6 +21,12 @@ export default function StudentLoginPage() {
       return;
     }
 
+    const email = form.email.trim();
+    if (!EMAIL_RE.test(email)) {
+      setError("Enter a valid email address, such as student@ucalgary.ca.");
+      return;
+    }
+
     setLoading(true);
     // Simulate a brief login — no real auth needed
     setTimeout(() => {
@@ -27,8 +35,8 @@ export default function StudentLoginPage() {
         "dinocoach_user",
         JSON.stringify({
           type: "student",
-          name: form.name || form.email.split("@")[0],
-          email: form.email,
+          name: form.name || email.split("@")[0],
+          email: email.toLowerCase(),
           ucid: form.ucid,
         })
       );
@@ -64,6 +72,8 @@ export default function StudentLoginPage() {
           </label>
           <input
             type="email"
+            pattern="[^\s@]+@[^\s@]+\.[^\s@]+"
+            title="Enter an email address with a domain, such as student@ucalgary.ca."
             placeholder="student@ucalgary.ca"
             value={form.email}
             onChange={(e) => setForm({ ...form, email: e.target.value })}

@@ -73,7 +73,9 @@ export default function Home() {
                 <li className="flex items-center gap-2.5"><MapPin size={16} className="text-red" /> On site, school gym</li>
                 <li className="flex items-center gap-2.5"><Check size={16} className="text-red" /> Needs one assistant coach</li>
               </ul>
-              <button type="button" className="btn btn-primary mt-6 w-full">Apply to coach</button>
+              <Link href="/login/student" className="btn btn-primary mt-6 w-full">
+                Apply to coach
+              </Link>
             </div>
           </div>
         </section>

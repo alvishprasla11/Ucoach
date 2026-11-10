@@ -4,6 +4,8 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import AuthShell from "../../../components/AuthShell";
 
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
 export default function SchoolLoginPage() {
   const router = useRouter();
   const [form, setForm] = useState({ schoolName: "", email: "", password: "" });
@@ -19,14 +21,20 @@ export default function SchoolLoginPage() {
       return;
     }
 
+    const email = form.email.trim();
+    if (!EMAIL_RE.test(email)) {
+      setError("Enter a valid email address, such as admin@school.ca.");
+      return;
+    }
+
     setLoading(true);
     setTimeout(() => {
       localStorage.setItem(
         "dinocoach_user",
         JSON.stringify({
           type: "school",
-          name: form.schoolName || form.email.split("@")[0],
-          email: form.email,
+          name: form.schoolName || email.split("@")[0],
+          email: email.toLowerCase(),
         })
       );
       router.push("/school/dashboard");
@@ -61,6 +69,8 @@ export default function SchoolLoginPage() {
           </label>
           <input
             type="email"
+            pattern="[^\s@]+@[^\s@]+\.[^\s@]+"
+            title="Enter an email address with a domain, such as admin@school.ca."
             placeholder="admin@school.cbe.ab.ca"
             value={form.email}
             onChange={(e) => setForm({ ...form, email: e.target.value })}
