@@ -10,7 +10,7 @@ const brand = Roboto_Slab({
 export const metadata: Metadata = {
   title: "UCoach — UCalgary Dinos Volunteer Coaching",
   description:
-    "Connecting UCalgary Dinos varsity athletes with Calgary schools as volunteer coaches for youth basketball and football teams.",
+    "Connecting UCalgary Dinos varsity athletes with Calgary schools as volunteer coaches for youth football, basketball, soccer and flag football teams.",
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

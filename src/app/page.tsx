@@ -12,10 +12,10 @@ const steps = [
 ];
 
 const sports = [
-  ["Basketball", "Elementary, junior high, high school"],
   ["Football", "Junior high and high school"],
+  ["Basketball", "Elementary, junior high, high school"],
+  ["Soccer", "All grade levels"],
   ["Flag football", "Elementary"],
-  ["Girls basketball", "All grade levels"],
 ];
 
 export default function Home() {
@@ -44,7 +44,7 @@ export default function Home() {
             </h1>
             <p className="enter enter-3 mt-6 max-w-xl text-lg leading-relaxed text-muted">
               UCoach matches UCalgary Dinos student-athletes with elementary, junior high and
-              high school basketball and football teams that need a volunteer coach.
+              high school football, basketball, soccer and flag football teams that need a volunteer coach.
             </p>
             <div className="enter enter-4 mt-9 flex flex-wrap gap-3">
               <Link href="/login/student" className="btn btn-primary">
@@ -131,7 +131,7 @@ export default function Home() {
         {/* Sports */}
         <section id="sports" className="bg-ink text-paper">
           <div className="mx-auto max-w-6xl px-6 py-20">
-            <h2 className="max-w-xl text-4xl font-bold sm:text-5xl">Basketball and football, every grade.</h2>
+            <h2 className="max-w-xl text-4xl font-bold sm:text-5xl">Football, basketball, soccer and flag football.</h2>
             <dl className="mt-12 grid border-t border-white/15 sm:grid-cols-2">
               {sports.map(([name, levels]) => (
                 <div key={name} className="flex items-baseline justify-between gap-4 border-b border-white/15 py-5 sm:odd:pr-8 sm:even:pl-8 sm:even:border-l sm:even:border-white/15">

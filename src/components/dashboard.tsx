@@ -188,7 +188,7 @@ export function ToastView({ toast }: { toast: Toast }) {
 }
 
 export const LEVELS = ["Elementary (K-6)", "Middle School (7-9)", "High School (10-12)"] as const;
-export const SPORTS = ["Basketball", "Football", "Flag Football", "Girls Basketball", "Other"] as const;
+export const SPORTS = ["Football", "Basketball", "Soccer", "Flag Football"] as const;
 
 export async function api<T = unknown>(url: string, init?: RequestInit): Promise<T> {
   const res = await fetch(url, {
