@@ -43,7 +43,7 @@ export default function Home() {
               Varsity athletes, coaching Calgary&rsquo;s youth teams.
             </h1>
             <p className="enter enter-3 mt-6 max-w-xl text-lg leading-relaxed text-muted">
-              DinoCoach matches UCalgary Dinos student-athletes with elementary, junior high and
+              UCoach matches UCalgary Dinos student-athletes with elementary, junior high and
               high school basketball and football teams that need a volunteer coach.
             </p>
             <div className="enter enter-4 mt-9 flex flex-wrap gap-3">

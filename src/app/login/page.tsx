@@ -15,7 +15,7 @@ export default function LoginPage() {
       side={{ title: "Good coaches change how kids see the game.", points: ["Post or find a coaching need", "Match by sport, grade and schedule", "Free for schools and athletes"] }}
     >
       <h1 className="text-4xl font-bold">Log in</h1>
-      <p className="mt-2 text-muted">Choose how you&rsquo;ll use DinoCoach.</p>
+      <p className="mt-2 text-muted">Choose how you&rsquo;ll use UCoach.</p>
       <div className="mt-8 space-y-4">
         {options.map((o) => (
           <Link key={o.href} href={o.href} className="card-link group flex items-center gap-5 rounded-2xl border border-line bg-white p-5">

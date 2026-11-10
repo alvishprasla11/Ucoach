@@ -13,7 +13,7 @@ const body = Inter({
 });
 
 export const metadata: Metadata = {
-  title: "DinoCoach — UCalgary Dinos Volunteer Coaching",
+  title: "UCoach — UCalgary Dinos Volunteer Coaching",
   description:
     "Connecting UCalgary Dinos varsity athletes with Calgary schools as volunteer coaches for youth basketball and football teams.",
 };
