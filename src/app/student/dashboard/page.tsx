@@ -1,293 +1,306 @@
 "use client";
 
-import { useState, useEffect } from "react";
-import { useRouter } from "next/navigation";
-import Link from "next/link";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import type { ApplicationWithPosting, PostingWithStats } from "@/lib/db";
+import {
+  DashboardShell, Badge, Stat, Empty, Tabs, Chips, Modal, ToastView, useToast,
+  useRequireUser, api, LEVELS,
+} from "../../../components/dashboard";
+import {
+  Search, CalendarDays, Users, Mail, Hourglass, CircleCheck, Inbox, Loader2, Handshake, UserRound,
+} from "../../../components/icons";
 
-interface User {
-  type: string;
-  name: string;
-  email: string;
+type Tab = "commitments" | "find";
+
+function StatusBadge({ s, postingStatus }: { s: string; postingStatus?: string }) {
+  if (s === "accepted") return <Badge tone="green"><CircleCheck size={13} /> Confirmed</Badge>;
+  if (s === "pending") return <Badge tone="amber"><Hourglass size={13} /> Waiting for reply</Badge>;
+  if (s === "declined") return <Badge tone="grey">Not selected</Badge>;
+  return <Badge tone="grey">{postingStatus === "closed" ? "Closed" : "Withdrawn"}</Badge>;
 }
 
-interface Posting {
-  id: number;
-  school_name: string;
-  school_email: string;
-  school_level: string;
-  sport: string;
-  team_name: string | null;
-  description: string;
-  schedule: string;
-  contact_name: string;
-  contact_email: string;
-  num_coaches_needed: number;
-  created_at: string;
+function CommitmentCard({ a, onWithdraw }: { a: ApplicationWithPosting; onWithdraw: (a: ApplicationWithPosting) => void }) {
+  return (
+  <article className="rounded-2xl border border-line bg-white p-5">
+    <div className="flex flex-wrap items-start justify-between gap-3">
+      <div>
+        <p className="text-xs font-semibold uppercase tracking-wider text-red">{a.sport} · {a.school_level.split(" (")[0]}</p>
+        <h3 className="mt-1 text-xl font-bold">{a.school_name}</h3>
+        {a.team_name && <p className="text-sm text-muted">{a.team_name}</p>}
+      </div>
+      <StatusBadge s={a.status} postingStatus={a.posting_status} />
+    </div>
+    <ul className="mt-4 space-y-2 text-sm">
+      <li className="flex items-start gap-2.5"><CalendarDays size={16} className="mt-0.5 shrink-0 text-muted" />{a.schedule}</li>
+      {a.status === "accepted" ? (
+        <li className="flex items-start gap-2.5">
+          <Mail size={16} className="mt-0.5 shrink-0 text-muted" />
+          <span>
+            {a.contact_name} ·{" "}
+            <a className="link-draw font-medium text-red" href={`mailto:${a.contact_email}`}>{a.contact_email}</a>
+          </span>
+        </li>
+      ) : (
+        <li className="flex items-start gap-2.5"><UserRound size={16} className="mt-0.5 shrink-0 text-muted" />Contact: {a.contact_name}</li>
+      )}
+    </ul>
+    {a.status === "accepted" && (
+      <p className="mt-4 rounded-lg bg-emerald-50 px-3 py-2 text-sm text-emerald-900">
+        You&rsquo;re in. Email {a.contact_name.split(" ")[0]} to confirm your first practice.
+      </p>
+    )}
+    <div className="mt-4 flex items-center justify-between border-t border-line pt-3 text-xs text-muted">
+      <span>Requested {new Date(a.created_at.replace(" ", "T") + "Z").toLocaleDateString("en-CA")}</span>
+      {(a.status === "pending" || a.status === "accepted") && (
+        <button onClick={() => onWithdraw(a)} className="link-draw font-semibold hover:text-red">Withdraw</button>
+      )}
+    </div>
+  </article>
+  );
 }
 
-const SPORT_ICONS: Record<string, string> = {
-  Basketball: "🏀",
-  Football: "🏈",
-  "Flag Football": "🏈",
-  "Girls Basketball": "🏀",
-  Other: "🏅",
-};
-
-const LEVEL_COLORS: Record<string, string> = {
-  "Elementary (K-6)": "#2563eb",
-  "Middle School (7-9)": "#7c3aed",
-  "High School (10-12)": "#CC0000",
-};
+function Section({ title, items, onWithdraw }: { title: string; items: ApplicationWithPosting[]; onWithdraw: (a: ApplicationWithPosting) => void }) {
+  if (items.length === 0) return null;
+  return (
+    <section className="mt-8">
+      <h2 className="mb-3 text-lg font-bold">{title} <span className="text-muted">({items.length})</span></h2>
+      <div className="grid gap-4 md:grid-cols-2">{items.map((a) => <CommitmentCard key={a.id} a={a} onWithdraw={onWithdraw} />)}</div>
+    </section>
+  );
+}
 
 export default function StudentDashboard() {
-  const router = useRouter();
-  const [user, setUser] = useState<User | null>(null);
-  const [postings, setPostings] = useState<Posting[]>([]);
+  const user = useRequireUser("student");
+  const { toast, show } = useToast();
+
+  const [tab, setTab] = useState<Tab | null>(null);
+  const [apps, setApps] = useState<ApplicationWithPosting[]>([]);
+  const [postings, setPostings] = useState<PostingWithStats[]>([]);
   const [loading, setLoading] = useState(true);
-  const [filterSport, setFilterSport] = useState("All");
-  const [filterLevel, setFilterLevel] = useState("All");
+
   const [search, setSearch] = useState("");
+  const [sport, setSport] = useState("All");
+  const [level, setLevel] = useState("All");
 
-  useEffect(() => {
-    const stored = localStorage.getItem("dinocoach_user");
-    if (!stored) {
-      router.push("/login");
-      return;
-    }
-    const parsed = JSON.parse(stored) as User;
-    if (parsed.type !== "student") {
-      router.push("/login");
-      return;
-    }
-    setUser(parsed);
-    fetchPostings();
-  }, [router]);
+  const [joining, setJoining] = useState<PostingWithStats | null>(null);
+  const [note, setNote] = useState("");
+  const [ucid, setUcid] = useState("");
+  const [busy, setBusy] = useState(false);
 
-  const fetchPostings = async () => {
-    setLoading(true);
+  const email = user?.email;
+
+  const load = useCallback(async () => {
+    if (!email) return;
     try {
-      const res = await fetch("/api/postings");
-      const data = await res.json() as { postings: Posting[] };
-      setPostings(data.postings || []);
+      const q = encodeURIComponent(email);
+      const [a, p] = await Promise.all([
+        api<{ applications: ApplicationWithPosting[] }>(`/api/applications?student_email=${q}`),
+        api<{ postings: PostingWithStats[] }>(`/api/postings?student_email=${q}`),
+      ]);
+      setApps(a.applications);
+      setPostings(p.postings);
+      // Land on commitments if there are any, otherwise straight to finding a team.
+      setTab((t) => t ?? (a.applications.some((x) => x.status !== "withdrawn") ? "commitments" : "find"));
     } catch {
-      // ignore
+      show("error", "Couldn't load your data. Check your connection and refresh.");
     } finally {
       setLoading(false);
     }
-  };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [email]);
 
-  const handleLogout = () => {
-    localStorage.removeItem("dinocoach_user");
-    router.push("/");
-  };
+  // Fetch on mount: state is only set after the await, not synchronously.
+  // eslint-disable-next-line react-hooks/set-state-in-effect
+  useEffect(() => { void load(); }, [load]);
 
-  const sports = ["All", ...Array.from(new Set(postings.map((p) => p.sport)))];
-  const levels = ["All", "Elementary (K-6)", "Middle School (7-9)", "High School (10-12)"];
+  const groups = useMemo(() => ({
+    confirmed: apps.filter((a) => a.status === "accepted"),
+    pending: apps.filter((a) => a.status === "pending"),
+    past: apps.filter((a) => a.status === "declined" || a.status === "withdrawn"),
+  }), [apps]);
 
-  const filtered = postings.filter((p) => {
-    const matchSport = filterSport === "All" || p.sport === filterSport;
-    const matchLevel = filterLevel === "All" || p.school_level === filterLevel;
-    const matchSearch =
-      !search ||
-      p.school_name.toLowerCase().includes(search.toLowerCase()) ||
-      p.sport.toLowerCase().includes(search.toLowerCase()) ||
-      p.description.toLowerCase().includes(search.toLowerCase());
-    return matchSport && matchLevel && matchSearch;
+  const sports = useMemo(() => ["All", ...Array.from(new Set(postings.map((p) => p.sport)))], [postings]);
+  const levelOpts = ["All", ...LEVELS];
+
+  const visible = postings.filter((p) => {
+    if (sport !== "All" && p.sport !== sport) return false;
+    if (level !== "All" && p.school_level !== level) return false;
+    const q = search.trim().toLowerCase();
+    return !q || [p.school_name, p.sport, p.team_name, p.description].some((v) => v?.toLowerCase().includes(q));
   });
 
   if (!user) return null;
 
+  const openJoin = (p: PostingWithStats) => { setJoining(p); setNote(""); setUcid(user.ucid ?? ""); };
+
+  const submitJoin = async () => {
+    if (!joining) return;
+    setBusy(true);
+    try {
+      await api("/api/applications", {
+        method: "POST",
+        body: JSON.stringify({
+          posting_id: joining.id, student_name: user.name, student_email: user.email, ucid, message: note,
+        }),
+      });
+      show("ok", `Request sent to ${joining.school_name}`);
+      setJoining(null);
+      await load();
+      setTab("commitments");
+    } catch (e) {
+      show("error", e instanceof Error ? e.message : "Couldn't send your request");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const withdraw = async (a: ApplicationWithPosting) => {
+    if (!confirm(`Withdraw from ${a.school_name}${a.team_name ? ` · ${a.team_name}` : ""}?`)) return;
+    try {
+      await api(`/api/applications/${a.id}`, {
+        method: "PATCH",
+        body: JSON.stringify({ role: "student", email: user.email, status: "withdrawn" }),
+      });
+      show("ok", "You've withdrawn from this team");
+      await load();
+    } catch (e) {
+      show("error", e instanceof Error ? e.message : "Couldn't withdraw");
+    }
+  };
+
   return (
-    <main className="min-h-screen" style={{ backgroundColor: "#0a0a0a" }}>
-      {/* Navbar */}
-      <nav
-        className="w-full px-6 py-4 flex items-center justify-between shadow-lg"
-        style={{ backgroundColor: "#CC0000" }}
-      >
-        <div className="flex items-center gap-3">
-          <span className="text-3xl dino-roar">🦕</span>
-          <div>
-            <span className="text-white font-bold text-lg">
-              Dino<span style={{ color: "#F5A623" }}>Coach</span>
-            </span>
-            <p className="text-red-200 text-xs">{user.name} · Student Dashboard</p>
+    <DashboardShell user={user} roleLabel="UCalgary athlete">
+      <h1 className="text-4xl font-bold">Hi {user.name.split(" ")[0]}.</h1>
+      <p className="mt-1 text-muted">Your coaching commitments, and the teams that still need a coach.</p>
+
+      <div className="mt-6 grid grid-cols-3 gap-3">
+        <Stat label="Confirmed" value={groups.confirmed.length} />
+        <Stat label="Waiting for reply" value={groups.pending.length} />
+        <Stat label="Open teams" value={postings.filter((p) => p.spots_left > 0 && !p.my_application_status).length} />
+      </div>
+
+      <div className="mt-8">
+        <Tabs
+          value={tab ?? "commitments"}
+          onChange={setTab}
+          tabs={[
+            { id: "commitments", label: "My commitments", count: groups.confirmed.length + groups.pending.length },
+            { id: "find", label: "Find a team", count: postings.length },
+          ]}
+        />
+      </div>
+
+      {loading ? (
+        <p className="flex items-center justify-center gap-2 py-20 text-muted"><Loader2 className="animate-spin" size={18} /> Loading</p>
+      ) : tab === "find" ? (
+        <div className="mt-6">
+          <div className="relative">
+            <Search size={18} className="pointer-events-none absolute left-3.5 top-1/2 -translate-y-1/2 text-muted" />
+            <input
+              className="field !pl-10"
+              placeholder="Search by school, sport or team"
+              aria-label="Search teams"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+            />
           </div>
-        </div>
-        <div className="flex items-center gap-4">
-          <Link href="/login" className="text-red-200 text-sm hover:text-white">
-            Switch Account
-          </Link>
-          <button
-            onClick={handleLogout}
-            className="px-4 py-2 rounded-full text-sm font-semibold text-red-100 border border-red-300 hover:bg-red-700 transition-colors"
-          >
-            Logout
-          </button>
-        </div>
-      </nav>
+          {postings.length > 0 && (
+            <div className="mt-4 space-y-3">
+              {sports.length > 2 && <Chips label="Sport" options={sports} value={sport} onChange={setSport} />}
+              <Chips label="School level" options={levelOpts} value={level} onChange={setLevel} />
+            </div>
+          )}
 
-      <div className="max-w-6xl mx-auto px-6 py-10">
-        {/* Header */}
-        <div className="mb-8">
-          <h1 className="text-3xl font-black text-white mb-1">
-            Coaching Opportunities{" "}
-            <span className="text-lg font-normal" style={{ color: "#F5A623" }}>
-              🦕 Go Dinos!
-            </span>
-          </h1>
-          <p className="text-gray-400">
-            Find a school team to coach and give back to the Calgary community
-          </p>
+          <div className="mt-6 grid gap-4 md:grid-cols-2">
+            {visible.map((p) => {
+              const mine = p.my_application_status;
+              const joined = mine === "pending" || mine === "accepted";
+              const full = p.spots_left <= 0;
+              return (
+                <article key={p.id} className="card-link flex flex-col rounded-2xl border border-line bg-white p-5">
+                  <div className="flex items-start justify-between gap-3">
+                    <p className="text-xs font-semibold uppercase tracking-wider text-red">{p.sport} · {p.school_level.split(" (")[0]}</p>
+                    {joined && <StatusBadge s={mine!} />}
+                  </div>
+                  <h3 className="mt-1 text-xl font-bold">{p.school_name}</h3>
+                  {p.team_name && <p className="text-sm text-muted">{p.team_name}</p>}
+                  <p className="mt-3 line-clamp-3 flex-1 text-sm leading-relaxed text-muted">{p.description}</p>
+                  <ul className="mt-4 space-y-1.5 text-sm">
+                    <li className="flex items-start gap-2.5"><CalendarDays size={16} className="mt-0.5 shrink-0 text-muted" />{p.schedule}</li>
+                    <li className="flex items-center gap-2.5">
+                      <Users size={16} className="shrink-0 text-muted" />
+                      {full ? "All spots filled" : `${p.spots_left} coach${p.spots_left === 1 ? "" : "es"} needed`}
+                    </li>
+                  </ul>
+                  {joined ? (
+                    <button onClick={() => setTab("commitments")} className="btn btn-ghost mt-5 w-full">View in my commitments</button>
+                  ) : mine === "declined" ? (
+                    <button disabled className="btn btn-ghost mt-5 w-full opacity-60">Not selected</button>
+                  ) : full ? (
+                    <button disabled className="btn btn-ghost mt-5 w-full opacity-60">Spots filled</button>
+                  ) : (
+                    <button onClick={() => openJoin(p)} className="btn btn-primary mt-5 w-full">
+                      {mine === "withdrawn" ? "Join again" : "Join this team"}
+                    </button>
+                  )}
+                </article>
+              );
+            })}
+          </div>
+          {visible.length === 0 && (
+            <Empty
+              icon={<Inbox size={24} />}
+              title={postings.length === 0 ? "No teams posted yet" : "No teams match"}
+              body={postings.length === 0 ? "Schools are still adding teams. Check back soon." : "Try a different sport or level, or clear your search."}
+            />
+          )}
         </div>
-
-        {/* Filters */}
-        <div
-          className="rounded-2xl p-5 mb-8 border flex flex-col md:flex-row gap-4"
-          style={{ backgroundColor: "#1a1a1a", borderColor: "#333" }}
-        >
-          <input
-            type="text"
-            placeholder="🔍 Search schools, sports..."
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            className="flex-1 px-4 py-3 rounded-xl text-white placeholder-gray-500 border border-gray-700 outline-none focus:border-red-500 transition-colors"
-            style={{ backgroundColor: "#0d0d0d" }}
+      ) : apps.length === 0 ? (
+        <div className="mt-8">
+          <Empty
+            icon={<Handshake size={24} />}
+            title="You haven't joined a team yet"
+            body="Browse teams that need a coach and join in two clicks."
+            action={<button onClick={() => setTab("find")} className="btn btn-primary">Find a team</button>}
           />
-          <select
-            value={filterSport}
-            onChange={(e) => setFilterSport(e.target.value)}
-            className="px-4 py-3 rounded-xl text-white border border-gray-700 outline-none focus:border-red-500 transition-colors"
-            style={{ backgroundColor: "#0d0d0d" }}
-          >
-            {sports.map((s) => (
-              <option key={s} value={s}>
-                {s === "All" ? "All Sports" : s}
-              </option>
-            ))}
-          </select>
-          <select
-            value={filterLevel}
-            onChange={(e) => setFilterLevel(e.target.value)}
-            className="px-4 py-3 rounded-xl text-white border border-gray-700 outline-none focus:border-red-500 transition-colors"
-            style={{ backgroundColor: "#0d0d0d" }}
-          >
-            {levels.map((l) => (
-              <option key={l} value={l}>
-                {l === "All" ? "All Levels" : l}
-              </option>
-            ))}
-          </select>
-          <button
-            onClick={fetchPostings}
-            className="px-5 py-3 rounded-xl font-bold text-white transition-all hover:scale-105"
-            style={{ backgroundColor: "#CC0000" }}
-          >
-            ↻ Refresh
-          </button>
         </div>
+      ) : (
+        <>
+          <Section title="Confirmed" items={groups.confirmed} onWithdraw={withdraw} />
+          <Section title="Waiting for a reply" items={groups.pending} onWithdraw={withdraw} />
+          <Section title="Past requests" items={groups.past} onWithdraw={withdraw} />
+        </>
+      )}
 
-        {/* Count */}
-        <p className="text-gray-500 text-sm mb-6">
-          Showing {filtered.length} of {postings.length} opportunities
-        </p>
-
-        {/* Postings */}
-        {loading ? (
-          <div className="text-center py-20">
-            <div className="text-6xl mb-4 dino-float">🦕</div>
-            <p className="text-gray-400 text-xl">Loading opportunities...</p>
-          </div>
-        ) : filtered.length === 0 ? (
-          <div
-            className="rounded-2xl p-14 text-center border-2 border-dashed"
-            style={{ borderColor: "#333" }}
-          >
-            <div className="text-5xl mb-4">🦖</div>
-            <p className="text-gray-400 text-lg">
-              {postings.length === 0
-                ? "No opportunities posted yet. Check back soon!"
-                : "No results match your filters."}
+      <Modal open={!!joining} onClose={() => setJoining(null)} title="Join this team">
+        {joining && (
+          <div>
+            <div className="rounded-xl border border-line bg-white p-4">
+              <p className="font-display text-lg font-bold">{joining.school_name}</p>
+              <p className="text-sm text-muted">{joining.team_name ? `${joining.team_name} · ` : ""}{joining.sport}</p>
+              <p className="mt-2 flex items-start gap-2 text-sm"><CalendarDays size={16} className="mt-0.5 shrink-0 text-muted" />{joining.schedule}</p>
+            </div>
+            <p className="mt-4 text-sm text-muted">
+              We&rsquo;ll send your name and UCalgary email ({user.email}) to {joining.contact_name}.
             </p>
-          </div>
-        ) : (
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-            {filtered.map((post) => (
-              <div
-                key={post.id}
-                className="rounded-2xl p-6 border flex flex-col transition-all duration-200 hover:scale-[1.02] hover:shadow-xl"
-                style={{ backgroundColor: "#1a1a1a", borderColor: "#2a2a2a" }}
-              >
-                {/* Top badges */}
-                <div className="flex items-center justify-between mb-3">
-                  <span
-                    className="inline-block px-3 py-1 rounded-full text-xs font-bold"
-                    style={{ backgroundColor: "#CC0000", color: "white" }}
-                  >
-                    {SPORT_ICONS[post.sport] || "🏅"} {post.sport}
-                  </span>
-                  <span
-                    className="inline-block px-3 py-1 rounded-full text-xs font-bold"
-                    style={{
-                      backgroundColor: LEVEL_COLORS[post.school_level] || "#555",
-                      color: "white",
-                    }}
-                  >
-                    {post.school_level.split(" ")[0]}
-                  </span>
-                </div>
-
-                {/* School */}
-                <h3 className="font-black text-white text-xl mb-1">{post.school_name}</h3>
-                {post.team_name && (
-                  <p className="text-sm mb-3" style={{ color: "#F5A623" }}>
-                    {post.team_name}
-                  </p>
-                )}
-
-                {/* Description */}
-                <p className="text-gray-400 text-sm leading-relaxed mb-4 flex-1 line-clamp-4">
-                  {post.description}
-                </p>
-
-                {/* Details */}
-                <div
-                  className="rounded-xl p-4 space-y-2 text-xs"
-                  style={{ backgroundColor: "#0d0d0d" }}
-                >
-                  <div className="flex items-start gap-2">
-                    <span>🗓</span>
-                    <span className="text-gray-300">{post.schedule}</span>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <span>👥</span>
-                    <span className="text-gray-300">
-                      {post.num_coaches_needed} volunteer coach
-                      {post.num_coaches_needed !== 1 ? "es" : ""} needed
-                    </span>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <span>👤</span>
-                    <span className="text-gray-300">{post.contact_name}</span>
-                  </div>
-                </div>
-
-                {/* Contact button */}
-                <a
-                  href={`mailto:${post.contact_email}?subject=DinoCoach - Volunteer Interest: ${post.sport} at ${post.school_name}&body=Hello ${post.contact_name},%0A%0AI am a UCalgary Dinos varsity athlete interested in volunteering as a coach for the ${post.sport} program at ${post.school_name}.%0A%0APlease let me know how I can get involved!%0A%0AThank you!`}
-                  className="mt-4 block text-center py-3 rounded-xl font-bold text-white transition-all duration-200 hover:scale-105"
-                  style={{ backgroundColor: "#CC0000" }}
-                >
-                  📧 Contact School →
-                </a>
-
-                <p className="text-gray-700 text-xs text-center mt-2">
-                  Posted {new Date(post.created_at).toLocaleDateString("en-CA")}
-                </p>
-              </div>
-            ))}
+            <label className="mt-5 block text-sm font-medium" htmlFor="note">Add a note <span className="text-muted">(optional)</span></label>
+            <textarea
+              id="note" rows={3} className="field mt-1.5 resize-none" value={note}
+              onChange={(e) => setNote(e.target.value)}
+              placeholder="Your sport, your experience, nights you can't make"
+            />
+            <label className="mt-4 block text-sm font-medium" htmlFor="ucid">UCID <span className="text-muted">(optional)</span></label>
+            <input id="ucid" className="field mt-1.5" value={ucid} onChange={(e) => setUcid(e.target.value)} placeholder="30123456" />
+            <div className="mt-6 flex gap-3">
+              <button onClick={() => setJoining(null)} className="btn btn-ghost">Cancel</button>
+              <button onClick={submitJoin} disabled={busy} className="btn btn-primary flex-1 disabled:opacity-60">
+                {busy ? "Sending..." : "Send request"}
+              </button>
+            </div>
           </div>
         )}
-      </div>
-    </main>
+      </Modal>
+      <ToastView toast={toast} />
+    </DashboardShell>
   );
 }

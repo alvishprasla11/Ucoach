@@ -1,61 +1,49 @@
 import { NextResponse } from "next/server";
-import { getAllPostings, createPosting } from "@/lib/db";
+import { listPostings, createPosting } from "@/lib/db";
+import { EMAIL_RE, bad, fail, str } from "../_util";
 
-export async function GET() {
+// GET /api/postings?school_email=…  -> that school's postings
+// GET /api/postings?student_email=… -> open postings, with the student's own request status
+export async function GET(request: Request) {
   try {
-    const postings = getAllPostings();
+    const q = new URL(request.url).searchParams;
+    const schoolEmail = q.get("school_email") || undefined;
+    const studentEmail = q.get("student_email") || undefined;
+    const postings = listPostings({
+      schoolEmail,
+      studentEmail,
+      openOnly: !schoolEmail,
+    });
     return NextResponse.json({ postings });
   } catch (error) {
-    console.error("GET /api/postings error:", error);
-    return NextResponse.json({ error: "Failed to fetch postings" }, { status: 500 });
+    return fail(error, "GET /api/postings");
   }
 }
 
 export async function POST(request: Request) {
   try {
-    const body = await request.json();
-    const {
-      school_name,
-      school_email,
-      school_level,
-      sport,
-      team_name,
-      description,
-      schedule,
-      contact_name,
-      contact_email,
-      num_coaches_needed,
-    } = body;
+    const b = await request.json();
+    const data = {
+      school_name: str(b.school_name),
+      school_email: str(b.school_email),
+      school_level: str(b.school_level),
+      sport: str(b.sport),
+      team_name: str(b.team_name) || null,
+      description: str(b.description),
+      schedule: str(b.schedule),
+      contact_name: str(b.contact_name),
+      contact_email: str(b.contact_email),
+      num_coaches_needed: Math.min(10, Math.max(1, Number(b.num_coaches_needed) || 1)),
+    };
 
-    if (
-      !school_name ||
-      !school_email ||
-      !school_level ||
-      !sport ||
-      !description ||
-      !schedule ||
-      !contact_name ||
-      !contact_email
-    ) {
-      return NextResponse.json({ error: "Missing required fields" }, { status: 400 });
+    const required = ["school_name", "school_email", "school_level", "sport", "description", "schedule", "contact_name", "contact_email"] as const;
+    if (required.some((k) => !data[k])) return bad("Missing required fields");
+    if (!EMAIL_RE.test(data.school_email) || !EMAIL_RE.test(data.contact_email)) {
+      return bad("Enter a valid email address");
     }
 
-    const posting = createPosting({
-      school_name,
-      school_email,
-      school_level,
-      sport,
-      team_name: team_name || null,
-      description,
-      schedule,
-      contact_name,
-      contact_email,
-      num_coaches_needed: num_coaches_needed || 1,
-    });
-
-    return NextResponse.json({ posting }, { status: 201 });
+    return NextResponse.json({ posting: createPosting(data) }, { status: 201 });
   } catch (error) {
-    console.error("POST /api/postings error:", error);
-    return NextResponse.json({ error: "Failed to create posting" }, { status: 500 });
+    return fail(error, "POST /api/postings");
   }
 }

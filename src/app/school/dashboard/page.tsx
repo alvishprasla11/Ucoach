@@ -1,449 +1,342 @@
 "use client";
 
-import { useState, useEffect } from "react";
-import { useRouter } from "next/navigation";
-import Link from "next/link";
+import { useCallback, useEffect, useState } from "react";
+import type { Application, PostingWithStats } from "@/lib/db";
+import {
+  DashboardShell, Badge, Stat, Empty, Chips, Modal, ToastView, useToast,
+  useRequireUser, api, LEVELS, SPORTS,
+} from "../../../components/dashboard";
+import {
+  Plus, CalendarDays, Users, Mail, ChevronDown, Trash2, Lock, LockOpen, Loader2, ClipboardList,
+  Check, X, UserRound,
+} from "../../../components/icons";
+import { saveSession } from "../../../lib/session";
 
-interface User {
-  type: string;
-  name: string;
-  email: string;
-}
+const DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 
-const SPORTS = ["Basketball", "Football", "Flag Football", "Girls Basketball", "Other"];
-const SCHOOL_LEVELS = ["Elementary (K-6)", "Middle School (7-9)", "High School (10-12)"];
+const fmtTime = (t: string) => {
+  const [h, m] = t.split(":").map(Number);
+  return `${((h + 11) % 12) + 1}${m ? ":" + String(m).padStart(2, "0") : ""} ${h < 12 ? "am" : "pm"}`;
+};
 
 export default function SchoolDashboard() {
-  const router = useRouter();
-  const [user, setUser] = useState<User | null>(null);
-  const [showForm, setShowForm] = useState(false);
-  const [submitting, setSubmitting] = useState(false);
-  const [success, setSuccess] = useState("");
-  const [myPostings, setMyPostings] = useState<unknown[]>([]);
+  const user = useRequireUser("school");
+  const { toast, show } = useToast();
 
-  const [form, setForm] = useState({
-    school_name: "",
-    school_email: "",
-    school_level: "",
-    sport: "",
-    team_name: "",
-    description: "",
-    schedule: "",
-    contact_name: "",
-    contact_email: "",
-    num_coaches_needed: 1,
+  const [postings, setPostings] = useState<PostingWithStats[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [open, setOpen] = useState<number | null>(null);
+  const [requests, setRequests] = useState<Record<number, Application[]>>({});
+
+  const [formOpen, setFormOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [f, setF] = useState({
+    school_name: "", sport: "Basketball", school_level: "High School (10-12)", team_name: "",
+    num: 1, days: [] as string[], start: "16:00", end: "17:30", from: "",
+    description: "", contact_name: "", contact_email: "",
   });
 
-  useEffect(() => {
-    const stored = localStorage.getItem("dinocoach_user");
-    if (!stored) {
-      router.push("/login");
-      return;
-    }
-    const parsed = JSON.parse(stored) as User;
-    if (parsed.type !== "school") {
-      router.push("/login");
-      return;
-    }
-    setUser(parsed);
-    // Pre-fill school info
-    setForm((f) => ({
-      ...f,
-      school_name: parsed.name || "",
-      school_email: parsed.email || "",
-      contact_email: parsed.email || "",
-    }));
+  const email = user?.email;
 
-    // Load existing postings
-    fetchPostings();
-  }, [router]);
-
-  const fetchPostings = async () => {
+  const load = useCallback(async () => {
+    if (!email) return;
     try {
-      const res = await fetch("/api/postings");
-      const data = await res.json() as { postings: unknown[] };
-      setMyPostings(data.postings || []);
+      const r = await api<{ postings: PostingWithStats[] }>(`/api/postings?school_email=${encodeURIComponent(email)}`);
+      setPostings(r.postings);
     } catch {
-      // ignore
-    }
-  };
-
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setSubmitting(true);
-    setSuccess("");
-
-    try {
-      const res = await fetch("/api/postings", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(form),
-      });
-
-      if (res.ok) {
-        setSuccess("✅ Your coaching opportunity has been posted!");
-        setShowForm(false);
-        fetchPostings();
-        // Reset form fields (keep school info)
-        setForm((f) => ({
-          ...f,
-          sport: "",
-          team_name: "",
-          school_level: "",
-          description: "",
-          schedule: "",
-          contact_name: "",
-          num_coaches_needed: 1,
-        }));
-      } else {
-        const err = await res.json() as { error?: string };
-        setSuccess("❌ Error: " + (err.error || "Unknown error"));
-      }
-    } catch {
-      setSuccess("❌ Failed to submit. Please try again.");
+      show("error", "Couldn't load your postings. Refresh to try again.");
     } finally {
-      setSubmitting(false);
+      setLoading(false);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [email]);
+
+  // Fetch on mount: state is only set after the await, not synchronously.
+  // eslint-disable-next-line react-hooks/set-state-in-effect
+  useEffect(() => { void load(); }, [load]);
+
+  const loadRequests = async (id: number) => {
+    if (!email) return;
+    try {
+      const r = await api<{ applications: Application[] }>(`/api/postings/${id}/applications?school_email=${encodeURIComponent(email)}`);
+      setRequests((m) => ({ ...m, [id]: r.applications }));
+    } catch {
+      show("error", "Couldn't load requests");
     }
   };
 
-  const handleLogout = () => {
-    localStorage.removeItem("dinocoach_user");
-    router.push("/");
+  const toggle = (id: number) => {
+    if (open === id) return setOpen(null);
+    setOpen(id);
+    void loadRequests(id);
   };
 
   if (!user) return null;
 
-  interface Posting {
-    id: number;
-    school_name: string;
-    sport: string;
-    school_level: string;
-    team_name?: string;
-    num_coaches_needed: number;
-    description: string;
-    schedule: string;
-    contact_name: string;
-    contact_email: string;
-    created_at: string;
-  }
+  const openForm = () => {
+    setF((x) => ({
+      ...x,
+      school_name: x.school_name || user.name,
+      contact_name: x.contact_name || user.contactName || "",
+      contact_email: x.contact_email || user.email,
+    }));
+    setFormOpen(true);
+  };
+
+  const submit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (f.days.length === 0) return show("error", "Pick at least one practice day");
+    if (f.end <= f.start) return show("error", "End time must be after the start time");
+    const schedule =
+      `${DAYS.filter((d) => f.days.includes(d)).join(", ")} · ${fmtTime(f.start)} to ${fmtTime(f.end)}` +
+      (f.from ? ` · from ${new Date(f.from + "T12:00").toLocaleDateString("en-CA", { month: "short", day: "numeric", year: "numeric" })}` : "");
+    setBusy(true);
+    try {
+      await api("/api/postings", {
+        method: "POST",
+        body: JSON.stringify({
+          school_name: f.school_name, school_email: user.email, school_level: f.school_level,
+          sport: f.sport, team_name: f.team_name, description: f.description, schedule,
+          contact_name: f.contact_name, contact_email: f.contact_email, num_coaches_needed: f.num,
+        }),
+      });
+      saveSession({ contactName: f.contact_name });
+      setFormOpen(false);
+      setF((x) => ({ ...x, team_name: "", description: "", days: [], num: 1 }));
+      show("ok", "Posting is live. Athletes can join now.");
+      await load();
+    } catch (err) {
+      show("error", err instanceof Error ? err.message : "Couldn't publish the posting");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const decide = async (p: PostingWithStats, a: Application, status: "accepted" | "declined") => {
+    try {
+      await api(`/api/applications/${a.id}`, {
+        method: "PATCH", body: JSON.stringify({ role: "school", email: user.email, status }),
+      });
+      show("ok", status === "accepted" ? `${a.student_name} is confirmed` : `${a.student_name} declined`);
+      await Promise.all([load(), loadRequests(p.id)]);
+    } catch (err) {
+      show("error", err instanceof Error ? err.message : "Couldn't update");
+    }
+  };
+
+  const setStatus = async (p: PostingWithStats, status: "open" | "closed") => {
+    try {
+      await api(`/api/postings/${p.id}`, { method: "PATCH", body: JSON.stringify({ school_email: user.email, status }) });
+      show("ok", status === "closed" ? "Posting closed to new athletes" : "Posting reopened");
+      await load();
+    } catch (err) {
+      show("error", err instanceof Error ? err.message : "Couldn't update");
+    }
+  };
+
+  const remove = async (p: PostingWithStats) => {
+    if (!confirm("Delete this posting and all its requests? This can't be undone.")) return;
+    try {
+      await api(`/api/postings/${p.id}?school_email=${encodeURIComponent(user.email)}`, { method: "DELETE" });
+      show("ok", "Posting deleted");
+      await load();
+    } catch (err) {
+      show("error", err instanceof Error ? err.message : "Couldn't delete");
+    }
+  };
+
+  const toggleDay = (d: string) =>
+    setF((x) => ({ ...x, days: x.days.includes(d) ? x.days.filter((v) => v !== d) : [...x.days, d] }));
+
+  const totalPending = postings.reduce((n, p) => n + p.pending_count, 0);
+  const totalConfirmed = postings.reduce((n, p) => n + p.accepted_count, 0);
 
   return (
-    <main className="min-h-screen" style={{ backgroundColor: "#0a0a0a" }}>
-      {/* Navbar */}
-      <nav
-        className="w-full px-6 py-4 flex items-center justify-between shadow-lg"
-        style={{ backgroundColor: "#CC0000" }}
-      >
-        <div className="flex items-center gap-3">
-          <span className="text-3xl">🏫</span>
-          <div>
-            <span className="text-white font-bold text-lg">
-              Dino<span style={{ color: "#F5A623" }}>Coach</span>
-            </span>
-            <p className="text-red-200 text-xs">{user.name} · School Dashboard</p>
-          </div>
-        </div>
-        <div className="flex items-center gap-4">
-          <Link href="/login" className="text-red-200 text-sm hover:text-white">
-            Switch Account
-          </Link>
-          <button
-            onClick={handleLogout}
-            className="px-4 py-2 rounded-full text-sm font-semibold text-red-100 border border-red-300 hover:bg-red-700 transition-colors"
-          >
-            Logout
-          </button>
-        </div>
-      </nav>
-
-      <div className="max-w-5xl mx-auto px-6 py-10">
-        {/* Header */}
-        <div className="mb-8 flex flex-col md:flex-row md:items-center md:justify-between gap-4">
-          <div>
-            <h1 className="text-3xl font-black text-white mb-1">
-              Welcome, <span style={{ color: "#F5A623" }}>{user.name}</span> 🏫
-            </h1>
-            <p className="text-gray-400">
-              Post coaching volunteer opportunities for your school&apos;s sports teams
-            </p>
-          </div>
-          <button
-            onClick={() => { setShowForm(!showForm); setSuccess(""); }}
-            className="px-6 py-3 rounded-full font-bold transition-all duration-200 hover:scale-105"
-            style={{ backgroundColor: showForm ? "#555" : "#CC0000", color: "white" }}
-          >
-            {showForm ? "✕ Cancel" : "+ Post New Opportunity"}
-          </button>
-        </div>
-
-        {/* Success message */}
-        {success && (
-          <div
-            className="mb-6 px-5 py-4 rounded-xl text-sm font-semibold"
-            style={{
-              backgroundColor: success.startsWith("✅") ? "#1a3a1a" : "#3a1a1a",
-              color: success.startsWith("✅") ? "#4ade80" : "#f87171",
-              border: `1px solid ${success.startsWith("✅") ? "#166534" : "#991b1b"}`,
-            }}
-          >
-            {success}
-          </div>
-        )}
-
-        {/* Post Form */}
-        {showForm && (
-          <form
-            onSubmit={handleSubmit}
-            className="rounded-2xl p-8 border-2 mb-10 space-y-5"
-            style={{ backgroundColor: "#1a1a1a", borderColor: "#CC0000" }}
-          >
-            <h2 className="text-xl font-black text-white mb-2">
-              🏀 New Coaching Opportunity
-            </h2>
-
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
-              <div>
-                <label className="block text-sm font-semibold mb-2" style={{ color: "#F5A623" }}>
-                  School Name <span className="text-red-400">*</span>
-                </label>
-                <input
-                  type="text"
-                  value={form.school_name}
-                  onChange={(e) => setForm({ ...form, school_name: e.target.value })}
-                  required
-                  placeholder="Forest Lawn High School"
-                  className="w-full px-4 py-3 rounded-xl text-white placeholder-gray-500 border border-gray-700 outline-none focus:border-red-500 transition-colors"
-                  style={{ backgroundColor: "#0d0d0d" }}
-                />
-              </div>
-
-              <div>
-                <label className="block text-sm font-semibold mb-2" style={{ color: "#F5A623" }}>
-                  School Email <span className="text-red-400">*</span>
-                </label>
-                <input
-                  type="email"
-                  value={form.school_email}
-                  onChange={(e) => setForm({ ...form, school_email: e.target.value })}
-                  required
-                  placeholder="admin@school.cbe.ab.ca"
-                  className="w-full px-4 py-3 rounded-xl text-white placeholder-gray-500 border border-gray-700 outline-none focus:border-red-500 transition-colors"
-                  style={{ backgroundColor: "#0d0d0d" }}
-                />
-              </div>
-
-              <div>
-                <label className="block text-sm font-semibold mb-2" style={{ color: "#F5A623" }}>
-                  School Level <span className="text-red-400">*</span>
-                </label>
-                <select
-                  value={form.school_level}
-                  onChange={(e) => setForm({ ...form, school_level: e.target.value })}
-                  required
-                  className="w-full px-4 py-3 rounded-xl text-white border border-gray-700 outline-none focus:border-red-500 transition-colors"
-                  style={{ backgroundColor: "#0d0d0d" }}
-                >
-                  <option value="">Select level...</option>
-                  {SCHOOL_LEVELS.map((l) => (
-                    <option key={l} value={l}>{l}</option>
-                  ))}
-                </select>
-              </div>
-
-              <div>
-                <label className="block text-sm font-semibold mb-2" style={{ color: "#F5A623" }}>
-                  Sport <span className="text-red-400">*</span>
-                </label>
-                <select
-                  value={form.sport}
-                  onChange={(e) => setForm({ ...form, sport: e.target.value })}
-                  required
-                  className="w-full px-4 py-3 rounded-xl text-white border border-gray-700 outline-none focus:border-red-500 transition-colors"
-                  style={{ backgroundColor: "#0d0d0d" }}
-                >
-                  <option value="">Select sport...</option>
-                  {SPORTS.map((s) => (
-                    <option key={s} value={s}>{s}</option>
-                  ))}
-                </select>
-              </div>
-
-              <div>
-                <label className="block text-sm font-semibold mb-2" style={{ color: "#F5A623" }}>
-                  Team Name (optional)
-                </label>
-                <input
-                  type="text"
-                  value={form.team_name}
-                  onChange={(e) => setForm({ ...form, team_name: e.target.value })}
-                  placeholder="e.g. Junior Varsity Boys Basketball"
-                  className="w-full px-4 py-3 rounded-xl text-white placeholder-gray-500 border border-gray-700 outline-none focus:border-red-500 transition-colors"
-                  style={{ backgroundColor: "#0d0d0d" }}
-                />
-              </div>
-
-              <div>
-                <label className="block text-sm font-semibold mb-2" style={{ color: "#F5A623" }}>
-                  # of Coaches Needed
-                </label>
-                <input
-                  type="number"
-                  min={1}
-                  max={10}
-                  value={form.num_coaches_needed}
-                  onChange={(e) =>
-                    setForm({ ...form, num_coaches_needed: parseInt(e.target.value) || 1 })
-                  }
-                  className="w-full px-4 py-3 rounded-xl text-white border border-gray-700 outline-none focus:border-red-500 transition-colors"
-                  style={{ backgroundColor: "#0d0d0d" }}
-                />
-              </div>
-            </div>
-
-            <div>
-              <label className="block text-sm font-semibold mb-2" style={{ color: "#F5A623" }}>
-                Schedule / Availability <span className="text-red-400">*</span>
-              </label>
-              <input
-                type="text"
-                value={form.schedule}
-                onChange={(e) => setForm({ ...form, schedule: e.target.value })}
-                required
-                placeholder="e.g. Tuesdays & Thursdays 4-6pm, starting January 2027"
-                className="w-full px-4 py-3 rounded-xl text-white placeholder-gray-500 border border-gray-700 outline-none focus:border-red-500 transition-colors"
-                style={{ backgroundColor: "#0d0d0d" }}
-              />
-            </div>
-
-            <div>
-              <label className="block text-sm font-semibold mb-2" style={{ color: "#F5A623" }}>
-                Description / Requirements <span className="text-red-400">*</span>
-              </label>
-              <textarea
-                value={form.description}
-                onChange={(e) => setForm({ ...form, description: e.target.value })}
-                required
-                rows={4}
-                placeholder="Describe what you're looking for in a volunteer coach, any experience requirements, what the role involves, etc."
-                className="w-full px-4 py-3 rounded-xl text-white placeholder-gray-500 border border-gray-700 outline-none focus:border-red-500 transition-colors resize-none"
-                style={{ backgroundColor: "#0d0d0d" }}
-              />
-            </div>
-
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
-              <div>
-                <label className="block text-sm font-semibold mb-2" style={{ color: "#F5A623" }}>
-                  Contact Person Name <span className="text-red-400">*</span>
-                </label>
-                <input
-                  type="text"
-                  value={form.contact_name}
-                  onChange={(e) => setForm({ ...form, contact_name: e.target.value })}
-                  required
-                  placeholder="Coach / Athletic Director name"
-                  className="w-full px-4 py-3 rounded-xl text-white placeholder-gray-500 border border-gray-700 outline-none focus:border-red-500 transition-colors"
-                  style={{ backgroundColor: "#0d0d0d" }}
-                />
-              </div>
-
-              <div>
-                <label className="block text-sm font-semibold mb-2" style={{ color: "#F5A623" }}>
-                  Contact Email <span className="text-red-400">*</span>
-                </label>
-                <input
-                  type="email"
-                  value={form.contact_email}
-                  onChange={(e) => setForm({ ...form, contact_email: e.target.value })}
-                  required
-                  placeholder="contact@school.ca"
-                  className="w-full px-4 py-3 rounded-xl text-white placeholder-gray-500 border border-gray-700 outline-none focus:border-red-500 transition-colors"
-                  style={{ backgroundColor: "#0d0d0d" }}
-                />
-              </div>
-            </div>
-
-            <button
-              type="submit"
-              disabled={submitting}
-              className="w-full py-4 rounded-xl font-black text-lg text-white transition-all duration-200 hover:scale-105 disabled:opacity-60"
-              style={{ backgroundColor: "#CC0000" }}
-            >
-              {submitting ? "Posting... 🦕" : "🏀 Post Opportunity →"}
-            </button>
-          </form>
-        )}
-
-        {/* Posted Opportunities */}
+    <DashboardShell user={user} roleLabel="School">
+      <div className="flex flex-wrap items-end justify-between gap-4">
         <div>
-          <h2 className="text-2xl font-black text-white mb-6">
-            All Posted Opportunities{" "}
-            <span className="text-lg font-normal" style={{ color: "#F5A623" }}>
-              ({myPostings.length})
-            </span>
-          </h2>
+          <h1 className="text-4xl font-bold">Your postings</h1>
+          <p className="mt-1 text-muted">Teams from {user.name} that are looking for a coach.</p>
+        </div>
+        <button onClick={openForm} className="btn btn-primary"><Plus size={18} /> New posting</button>
+      </div>
 
-          {myPostings.length === 0 ? (
-            <div
-              className="rounded-2xl p-12 text-center border-2 border-dashed"
-              style={{ borderColor: "#333" }}
-            >
-              <div className="text-5xl mb-4">📋</div>
-              <p className="text-gray-400 text-lg">No opportunities posted yet.</p>
-              <p className="text-gray-600 text-sm mt-2">
-                Click &quot;Post New Opportunity&quot; to get started!
-              </p>
-            </div>
-          ) : (
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-              {(myPostings as Posting[]).map((post) => (
-                <div
-                  key={post.id}
-                  className="rounded-2xl p-6 border transition-all duration-200 hover:scale-[1.02]"
-                  style={{ backgroundColor: "#1a1a1a", borderColor: "#333" }}
-                >
-                  <div className="flex items-start justify-between mb-3">
+      <div className="mt-6 grid grid-cols-3 gap-3">
+        <Stat label="Postings" value={postings.length} />
+        <Stat label="Need your reply" value={totalPending} />
+        <Stat label="Coaches confirmed" value={totalConfirmed} />
+      </div>
+
+      {loading ? (
+        <p className="flex items-center justify-center gap-2 py-20 text-muted"><Loader2 className="animate-spin" size={18} /> Loading</p>
+      ) : postings.length === 0 ? (
+        <div className="mt-8">
+          <Empty
+            icon={<ClipboardList size={24} />}
+            title="Post your first team"
+            body="Pick a sport, choose practice days and publish. It takes about a minute."
+            action={<button onClick={openForm} className="btn btn-primary"><Plus size={18} /> New posting</button>}
+          />
+        </div>
+      ) : (
+        <div className="mt-8 space-y-4">
+          {postings.map((p) => {
+            const isOpen = open === p.id;
+            const reqs = requests[p.id];
+            const filled = p.spots_left === 0;
+            return (
+              <article key={p.id} className="rounded-2xl border border-line bg-white">
+                <div className="p-5">
+                  <div className="flex flex-wrap items-start justify-between gap-3">
                     <div>
-                      <span
-                        className="inline-block px-3 py-1 rounded-full text-xs font-bold mb-2"
-                        style={{ backgroundColor: "#CC0000", color: "white" }}
-                      >
-                        {post.sport}
-                      </span>
-                      <h3 className="font-bold text-white text-lg">
-                        {post.school_name}
-                      </h3>
-                      {post.team_name && (
-                        <p className="text-sm" style={{ color: "#F5A623" }}>
-                          {post.team_name}
-                        </p>
-                      )}
+                      <p className="text-xs font-semibold uppercase tracking-wider text-red">{p.sport} · {p.school_level.split(" (")[0]}</p>
+                      <h3 className="mt-1 text-xl font-bold">{p.team_name || `${p.sport} team`}</h3>
                     </div>
-                    <div className="text-right">
-                      <span className="text-xs text-gray-500">{post.school_level}</span>
+                    <div className="flex gap-2">
+                      {p.status === "closed" ? <Badge tone="grey">Closed</Badge> : filled ? <Badge tone="green">Filled</Badge> : <Badge tone="amber">Open</Badge>}
+                      {p.pending_count > 0 && <Badge tone="red">{p.pending_count} new</Badge>}
                     </div>
                   </div>
-
-                  <p className="text-gray-400 text-sm mb-4 leading-relaxed line-clamp-3">
-                    {post.description}
-                  </p>
-
-                  <div className="space-y-1 text-xs text-gray-500">
-                    <p>🗓 {post.schedule}</p>
-                    <p>
-                      👥 {post.num_coaches_needed} coach
-                      {post.num_coaches_needed !== 1 ? "es" : ""} needed
-                    </p>
-                    <p>📧 {post.contact_name} · {post.contact_email}</p>
-                    <p className="text-gray-700 mt-2">
-                      Posted {new Date(post.created_at).toLocaleDateString("en-CA")}
-                    </p>
+                  <ul className="mt-3 space-y-1.5 text-sm">
+                    <li className="flex items-start gap-2.5"><CalendarDays size={16} className="mt-0.5 shrink-0 text-muted" />{p.schedule}</li>
+                    <li className="flex items-center gap-2.5">
+                      <Users size={16} className="shrink-0 text-muted" />
+                      {p.accepted_count} of {p.num_coaches_needed} coach{p.num_coaches_needed === 1 ? "" : "es"} confirmed
+                    </li>
+                  </ul>
+                  <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-paper-2">
+                    <div className="h-full rounded-full bg-red transition-all" style={{ width: `${Math.min(100, (p.accepted_count / p.num_coaches_needed) * 100)}%` }} />
                   </div>
                 </div>
+
+                <div className="flex flex-wrap items-center justify-between gap-2 border-t border-line px-5 py-3">
+                  <button
+                    onClick={() => toggle(p.id)}
+                    aria-expanded={isOpen}
+                    className="inline-flex items-center gap-1.5 text-sm font-semibold hover:text-red"
+                  >
+                    Athletes ({p.pending_count + p.accepted_count})
+                    <ChevronDown size={16} className={`transition-transform ${isOpen ? "rotate-180" : ""}`} />
+                  </button>
+                  <div className="flex items-center gap-4 text-sm text-muted">
+                    {p.status === "open" ? (
+                      <button onClick={() => setStatus(p, "closed")} className="inline-flex items-center gap-1.5 hover:text-ink"><Lock size={14} /> Close</button>
+                    ) : (
+                      <button onClick={() => setStatus(p, "open")} className="inline-flex items-center gap-1.5 hover:text-ink"><LockOpen size={14} /> Reopen</button>
+                    )}
+                    <button onClick={() => remove(p)} className="inline-flex items-center gap-1.5 hover:text-red"><Trash2 size={14} /> Delete</button>
+                  </div>
+                </div>
+
+                {isOpen && (
+                  <div className="border-t border-line bg-paper px-5 py-4">
+                    {!reqs ? (
+                      <p className="py-4 text-center text-sm text-muted">Loading</p>
+                    ) : reqs.filter((a) => a.status !== "withdrawn").length === 0 ? (
+                      <p className="py-4 text-center text-sm text-muted">No one has joined yet. Athletes see this posting right now.</p>
+                    ) : (
+                      <ul className="divide-y divide-line">
+                        {reqs.filter((a) => a.status !== "withdrawn").map((a) => (
+                          <li key={a.id} className="flex flex-wrap items-center justify-between gap-3 py-3">
+                            <div className="min-w-0">
+                              <p className="flex items-center gap-2 font-semibold"><UserRound size={16} className="text-muted" />{a.student_name}</p>
+                              <a href={`mailto:${a.student_email}`} className="link-draw inline-flex items-center gap-1.5 text-sm text-muted"><Mail size={13} />{a.student_email}</a>
+                              {a.ucid && <span className="ml-3 text-sm text-muted">UCID {a.ucid}</span>}
+                              {a.message && <p className="mt-1 text-sm">&ldquo;{a.message}&rdquo;</p>}
+                            </div>
+                            <div className="flex items-center gap-2">
+                              {a.status === "accepted" && <Badge tone="green"><Check size={13} /> Confirmed</Badge>}
+                              {a.status === "declined" && <Badge tone="grey">Declined</Badge>}
+                              {a.status !== "accepted" && (
+                                <button onClick={() => decide(p, a, "accepted")} disabled={filled} className="btn btn-primary !px-3 !py-1.5 text-sm disabled:opacity-50">Accept</button>
+                              )}
+                              {a.status === "pending" && (
+                                <button onClick={() => decide(p, a, "declined")} className="btn btn-ghost !px-3 !py-1.5 text-sm"><X size={14} /> Decline</button>
+                              )}
+                              {a.status === "accepted" && (
+                                <button onClick={() => decide(p, a, "declined")} className="text-sm text-muted hover:text-red">Remove</button>
+                              )}
+                            </div>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </div>
+                )}
+              </article>
+            );
+          })}
+        </div>
+      )}
+
+      <Modal open={formOpen} onClose={() => setFormOpen(false)} title="New coaching posting">
+        <form onSubmit={submit} className="space-y-6">
+          <div>
+            <p className="mb-2 text-sm font-medium">Sport</p>
+            <Chips label="Sport" options={[...SPORTS]} value={f.sport as (typeof SPORTS)[number]} onChange={(v) => setF({ ...f, sport: v })} />
+          </div>
+          <div>
+            <p className="mb-2 text-sm font-medium">School level</p>
+            <Chips label="School level" options={[...LEVELS]} value={f.school_level as (typeof LEVELS)[number]} onChange={(v) => setF({ ...f, school_level: v })} />
+          </div>
+
+          <div className="grid gap-4 sm:grid-cols-[1fr_auto]">
+            <div>
+              <label htmlFor="team" className="mb-1.5 block text-sm font-medium">Team name <span className="text-muted">(optional)</span></label>
+              <input id="team" className="field" placeholder="Junior boys basketball" value={f.team_name} onChange={(e) => setF({ ...f, team_name: e.target.value })} />
+            </div>
+            <div>
+              <p className="mb-1.5 text-sm font-medium">Coaches needed</p>
+              <div className="flex items-center gap-1 rounded-[0.625rem] border border-line bg-white p-1">
+                <button type="button" aria-label="Fewer coaches" className="h-9 w-9 rounded-lg text-lg hover:bg-paper-2" onClick={() => setF({ ...f, num: Math.max(1, f.num - 1) })}>−</button>
+                <span className="w-8 text-center font-semibold" aria-live="polite">{f.num}</span>
+                <button type="button" aria-label="More coaches" className="h-9 w-9 rounded-lg text-lg hover:bg-paper-2" onClick={() => setF({ ...f, num: Math.min(10, f.num + 1) })}>+</button>
+              </div>
+            </div>
+          </div>
+
+          <div>
+            <p className="mb-2 text-sm font-medium">Practice days</p>
+            <div className="flex flex-wrap gap-2" role="group" aria-label="Practice days">
+              {DAYS.map((d) => (
+                <button key={d} type="button" aria-pressed={f.days.includes(d)} onClick={() => toggleDay(d)}
+                  className={`h-10 w-14 rounded-lg border text-sm font-medium transition-colors ${f.days.includes(d) ? "border-ink bg-ink text-white" : "border-line bg-white hover:border-ink"}`}>
+                  {d}
+                </button>
               ))}
             </div>
-          )}
-        </div>
-      </div>
-    </main>
+            <div className="mt-3 grid grid-cols-3 gap-3">
+              <div><label htmlFor="st" className="mb-1.5 block text-xs text-muted">Starts</label><input id="st" type="time" className="field" value={f.start} onChange={(e) => setF({ ...f, start: e.target.value })} required /></div>
+              <div><label htmlFor="en" className="mb-1.5 block text-xs text-muted">Ends</label><input id="en" type="time" className="field" value={f.end} onChange={(e) => setF({ ...f, end: e.target.value })} required /></div>
+              <div><label htmlFor="fr" className="mb-1.5 block text-xs text-muted">From <span>(optional)</span></label><input id="fr" type="date" className="field" value={f.from} onChange={(e) => setF({ ...f, from: e.target.value })} /></div>
+            </div>
+          </div>
+
+          <div>
+            <label htmlFor="desc" className="mb-1.5 block text-sm font-medium">What will the coach do?</label>
+            <textarea id="desc" required rows={3} className="field resize-none" value={f.description} onChange={(e) => setF({ ...f, description: e.target.value })}
+              placeholder="Run drills, help with game days. No experience needed beyond playing the sport." />
+          </div>
+
+          <div className="grid gap-4 sm:grid-cols-2">
+            <div>
+              <label htmlFor="cn" className="mb-1.5 block text-sm font-medium">Contact person</label>
+              <input id="cn" required className="field" placeholder="Athletic director" value={f.contact_name} onChange={(e) => setF({ ...f, contact_name: e.target.value })} />
+            </div>
+            <div>
+              <label htmlFor="ce" className="mb-1.5 block text-sm font-medium">Contact email</label>
+              <input id="ce" required type="email" className="field" value={f.contact_email} onChange={(e) => setF({ ...f, contact_email: e.target.value })} />
+            </div>
+          </div>
+          <div>
+            <label htmlFor="sn" className="mb-1.5 block text-sm font-medium">School name</label>
+            <input id="sn" required className="field" value={f.school_name} onChange={(e) => setF({ ...f, school_name: e.target.value })} />
+          </div>
+
+          <button type="submit" disabled={busy} className="btn btn-primary w-full disabled:opacity-60">{busy ? "Publishing..." : "Publish posting"}</button>
+        </form>
+      </Modal>
+      <ToastView toast={toast} />
+    </DashboardShell>
   );
 }
