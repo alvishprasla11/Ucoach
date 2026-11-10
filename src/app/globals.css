@@ -12,8 +12,8 @@
 }
 
 @theme inline {
-  --font-sans: var(--font-body);
-  --font-display: var(--font-display);
+  --font-sans: var(--font-brand);
+  --font-display: var(--font-brand);
   --color-paper: var(--paper);
   --color-paper-2: var(--paper-2);
   --color-ink: var(--ink);
@@ -27,11 +27,11 @@
 body {
   background: var(--paper);
   color: var(--ink);
-  font-family: var(--font-body), system-ui, sans-serif;
+  font-family: var(--font-brand), Georgia, serif;
 }
 
 h1, h2, h3, .font-display {
-  font-family: var(--font-display), system-ui, sans-serif;
+  font-family: var(--font-brand), Georgia, serif;
   letter-spacing: -0.02em;
 }
 
